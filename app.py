@@ -1,6 +1,6 @@
 import streamlit as st
 
-from src.aae_strategist import rank_products
+from src.aae_strategist import FACTOR_MAX, rank_products
 from src.shopee_analyzer import analyze_shopee_url
 
 st.set_page_config(page_title="Arash Affiliate Engine", page_icon="🔥", layout="centered")
@@ -11,7 +11,23 @@ st.caption("Bukan cuma cari produk laris — AAE menilai peluang affiliate-nya."
 manual_tab, shopee_tab = st.tabs(["📊 Bandingkan Manual", "🔗 Analisa Link Shopee"])
 
 
+def competition_input(key, default="Tidak diketahui"):
+    label = "Persaingan"
+    options = ["Tidak diketahui", "Rendah", "Sedang", "Tinggi"]
+    selected = st.selectbox(label, options, index=options.index(default), key=key)
+    return {"Tidak diketahui": -1, "Rendah": 2, "Sedang": 5, "Tinggi": 8}[selected], selected
+
+
 def show_result(winner):
+    decision = winner["decision"]
+    if decision == "🔥 AMBIL & TES":
+        st.success(f"🚀 {decision}")
+    elif decision == "🟡 KUMPULKAN DATA":
+        st.warning(f"{decision}")
+    else:
+        st.error(f"{decision}")
+
+    st.info(f"**Alasan keputusan:** {winner['decision_reason']}")
     st.success(f"🏆 Skor: {winner['score']}/100 — {winner['label']}")
     st.metric("Confidence data", f"{winner['confidence']}%")
     if winner["estimated_commission_per_sale"]:
@@ -19,9 +35,13 @@ def show_result(winner):
     else:
         st.warning("Komisi belum tersedia. Estimasi komisi per transaksi belum bisa dihitung.")
 
+    if winner["missing_critical_fields"]:
+        st.warning("Data kritis yang masih kurang: " + ", ".join(winner["missing_critical_fields"]))
+
+    st.write(f"**Faktor terlemah (relatif):** {winner['weakest_factor']}")
     st.subheader("🧠 Penilaian AAE")
     for factor, value in winner["breakdown"].items():
-        st.write(f"**{factor}:** {value}/{{'Demand':25,'Affiliate Economics':20,'Product Quality':15,'Content Potential':20,'Competition':10,'Risk':10}[factor]}")
+        st.write(f"**{factor}:** {value}/{FACTOR_MAX[factor]}")
 
     st.subheader("🎯 Strategi Konten")
     st.write(f"**Prioritas:** {winner['priority']}")
@@ -77,40 +97,30 @@ with shopee_tab:
                 problem = st.text_input("Masalah yang diselesaikan", value=data.get("problem", ""), key="shopee_problem")
                 benefit = st.text_input("Manfaat utama", value=data.get("benefit", ""), key="shopee_benefit")
                 target = st.text_input("Target pembeli", value=data.get("target", ""), key="shopee_target")
-                competition = st.number_input("Persaingan (opsional, 0=rendah, 10=tinggi)", min_value=0.0, max_value=10.0, value=5.0, step=1.0, key="shopee_competition")
+                competition, competition_label = competition_input("shopee_competition")
 
                 st.divider()
                 st.subheader("🧾 Kualitas Data")
                 checks = {
-                    "Nama": bool(name),
-                    "Harga": price > 0,
-                    "Rating produk": rating > 0,
-                    "Terjual": sales > 0,
-                    "Ulasan": review_count > 0,
-                    "Komisi": commission > 0,
-                    "Masalah": bool(problem),
-                    "Manfaat": bool(benefit),
-                    "Target": bool(target),
+                    "Nama": bool(name), "Harga": price > 0, "Rating produk": rating > 0,
+                    "Terjual": sales > 0, "Ulasan": review_count > 0, "Komisi": commission > 0,
+                    "Masalah": bool(problem), "Manfaat": bool(benefit), "Target": bool(target),
+                    "Persaingan": competition >= 0,
                 }
                 for label, done in checks.items():
                     st.write(f"{'✅' if done else '⬜'} {label}")
+                if competition < 0:
+                    st.caption("Persaingan belum diketahui tidak dihitung sebagai data pasti; AAE memakai skor netral.")
 
                 if st.button("🚀 Nilai Potensi Affiliate", use_container_width=True, key="score_shopee"):
                     if not name:
                         st.warning("Nama produk wajib diisi.")
                     else:
                         product = {
-                            "name": name,
-                            "category": category,
-                            "price": price,
-                            "commission_percent": commission,
-                            "rating": rating,
-                            "sales": sales,
-                            "review_count": review_count,
-                            "seller_rating": seller_rating,
-                            "problem": problem,
-                            "benefit": benefit,
-                            "target": target,
+                            "name": name, "category": category, "price": price,
+                            "commission_percent": commission, "rating": rating, "sales": sales,
+                            "review_count": review_count, "seller_rating": seller_rating,
+                            "problem": problem, "benefit": benefit, "target": target,
                             "competition": competition,
                         }
                         show_result(rank_products([product])[0])
@@ -135,7 +145,7 @@ with manual_tab:
             sales = st.number_input("Terjual", min_value=0, value=1000, step=100, key=f"sales_{i}")
         review_count = st.number_input("Jumlah ulasan", min_value=0, value=0, step=10, key=f"reviews_{i}")
         seller_rating = st.number_input("Rating seller (opsional)", min_value=0.0, max_value=5.0, value=0.0, step=0.1, key=f"seller_{i}")
-        competition = st.number_input("Persaingan (0=rendah, 10=tinggi)", min_value=0.0, max_value=10.0, value=5.0, step=1.0, key=f"competition_{i}")
+        competition, competition_label = competition_input(f"competition_{i}")
         problem = st.text_input("Masalah yang diselesaikan", key=f"problem_{i}")
         benefit = st.text_input("Manfaat utama", key=f"benefit_{i}")
         target = st.text_input("Target pembeli", key=f"target_{i}")
@@ -159,12 +169,12 @@ with manual_tab:
             st.subheader("🏆 Ranking Produk")
             for idx, item in enumerate(ranked, start=1):
                 st.markdown(f"**#{idx} — {item['product']}**")
-                st.write(f"Skor: **{item['score']}/100** — {item['label']} | Confidence: **{item['confidence']}%**")
+                st.write(f"Skor: **{item['score']}/100** — {item['label']} | Confidence: **{item['confidence']}%** | Keputusan: **{item['decision']}**")
                 st.progress(min(int(item["score"]), 100))
             st.subheader("🔎 Kenapa produk ini dipilih?")
-            for factor, value in winner["breakdown"].items():
-                st.write(f"**{factor}:** {value}")
+            st.write(f"**Keputusan:** {winner['decision']}")
+            st.write(f"**Alasan:** {winner['decision_reason']}")
             show_result(winner)
 
 st.divider()
-st.caption("AAE MVP v6 — skor menilai peluang affiliate, bukan sekadar jumlah penjualan. Analisa Shopee tetap best-effort karena halaman dapat dinamis atau membatasi akses.")
+st.caption("AAE MVP v7 — Decision Engine memisahkan produk yang layak dites dari produk yang masih kekurangan data. Analisa Shopee tetap best-effort karena halaman dapat dinamis atau membatasi akses.")
