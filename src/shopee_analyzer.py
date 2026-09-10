@@ -12,7 +12,7 @@ SHOPEE_HOSTS = {"shopee.co.id", "www.shopee.co.id"}
 
 def is_shopee_url(url):
     try:
-        parsed = urlparse(url.strip())
+        parsed = urlparse(str(url).strip())
         return parsed.scheme in {"http", "https"} and parsed.netloc.lower() in SHOPEE_HOSTS
     except Exception:
         return False
@@ -31,15 +31,30 @@ def _first_text(soup, selectors):
 def _number(value):
     if value is None:
         return 0
-    text = str(value).strip().lower().replace(".", "").replace(",", "")
-    match = re.search(r"([0-9]+(?:\.[0-9]+)?)\s*([km]?)", text)
+    text = str(value).strip().lower()
+    match = re.search(r"([0-9]+(?:[.,][0-9]+)?)\s*(rb|ribu|k|jt|juta|m)?", text)
     if not match:
         return 0
-    number = float(match.group(1))
-    suffix = match.group(2)
-    if suffix == "k":
+    raw = match.group(1)
+    suffix = match.group(2) or ""
+    if "," in raw and "." in raw:
+        if raw.rfind(",") > raw.rfind("."):
+            raw = raw.replace(".", "").replace(",", ".")
+        else:
+            raw = raw.replace(",", "")
+    elif "," in raw:
+        parts = raw.split(",")
+        raw = raw.replace(",", ".") if len(parts[-1]) <= 2 else raw.replace(",", "")
+    elif "." in raw:
+        parts = raw.split(".")
+        raw = raw.replace(".", ".") if len(parts[-1]) <= 2 else raw.replace(".", "")
+    try:
+        number = float(raw)
+    except ValueError:
+        return 0
+    if suffix in {"rb", "ribu", "k"}:
         number *= 1000
-    elif suffix == "m":
+    elif suffix in {"jt", "juta", "m"}:
         number *= 1000000
     return int(number)
 
@@ -69,8 +84,8 @@ def _extract_sales_and_reviews(page_text):
     review_count = 0
 
     for pattern in [
-        r"([0-9][0-9.,]*\s*[kKmM]?)\s*(?:terjual|sold)",
-        r"terjual\s*([0-9][0-9.,]*\s*[kKmM]?)",
+        r"([0-9][0-9.,]*\s*(?:rb|ribu|k|jt|juta|m)?)\s*(?:terjual|sold)",
+        r"terjual\s*([0-9][0-9.,]*\s*(?:rb|ribu|k|jt|juta|m)?)",
     ]:
         match = re.search(pattern, page_text, re.I)
         if match:
@@ -78,8 +93,8 @@ def _extract_sales_and_reviews(page_text):
             break
 
     for pattern in [
-        r"([0-9][0-9.,]*\s*[kKmM]?)\s*(?:ulasan|penilaian|review)",
-        r"(?:ulasan|penilaian|review)\s*([0-9][0-9.,]*\s*[kKmM]?)",
+        r"([0-9][0-9.,]*\s*(?:rb|ribu|k|jt|juta|m)?)\s*(?:ulasan|penilaian|review)",
+        r"(?:ulasan|penilaian|review)\s*([0-9][0-9.,]*\s*(?:rb|ribu|k|jt|juta|m)?)",
     ]:
         match = re.search(pattern, page_text, re.I)
         if match:
