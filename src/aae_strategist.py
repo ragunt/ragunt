@@ -1,6 +1,15 @@
 import json
 import sys
 
+FACTOR_MAX = {
+    "Demand": 25,
+    "Affiliate Economics": 20,
+    "Product Quality": 15,
+    "Content Potential": 20,
+    "Competition": 10,
+    "Risk": 10,
+}
+
 
 def _num(value, default=0.0):
     try:
@@ -97,6 +106,43 @@ def score_label(score):
     return "🔴 SKIP"
 
 
+def _missing_critical_fields(product):
+    checks = {
+        "Harga": _num(product.get("price")) > 0,
+        "Rating produk": _num(product.get("rating")) > 0,
+        "Terjual": _num(product.get("sales")) > 0,
+        "Komisi": _num(product.get("commission_percent")) > 0,
+        "Masalah": _has(product.get("problem")),
+        "Manfaat": _has(product.get("benefit")),
+    }
+    return [label for label, complete in checks.items() if not complete]
+
+
+def _weakest_factor(breakdown):
+    return min(
+        breakdown,
+        key=lambda factor: breakdown[factor] / FACTOR_MAX[factor],
+    )
+
+
+def decision(product, score, confidence, breakdown):
+    missing = _missing_critical_fields(product)
+    commission = _num(product.get("commission_percent"))
+
+    if score < 55:
+        return "🔴 SKIP", "Skor terlalu rendah untuk diprioritaskan.", missing
+    if missing or confidence < 80 or commission <= 0:
+        reasons = []
+        if missing:
+            reasons.append("data kritis belum lengkap: " + ", ".join(missing))
+        if confidence < 80:
+            reasons.append(f"confidence baru {confidence}%")
+        return "🟡 KUMPULKAN DATA", "; ".join(reasons) + ".", missing
+    if score >= 70:
+        return "🔥 AMBIL & TES", "Skor dan kelengkapan data cukup kuat untuk masuk tahap uji konten.", missing
+    return "🟡 KUMPULKAN DATA", "Skor belum cukup kuat untuk langsung diuji; kumpulkan data tambahan.", missing
+
+
 def build_strategy(product):
     score = score_product(product)
     name = product.get("name", "Produk")
@@ -108,9 +154,12 @@ def build_strategy(product):
     estimated_commission = round(price * commission / 100, 0) if price and commission else 0
     confidence = _confidence(product)
     breakdown = score_breakdown(product)
-    weakest = min(breakdown, key=breakdown.get)
+    weakest = _weakest_factor(breakdown)
+    decision_label, decision_reason, missing_critical = decision(product, score, confidence, breakdown)
     return {
         "product": name, "score": score, "label": score_label(score),
+        "decision": decision_label, "decision_reason": decision_reason,
+        "missing_critical_fields": missing_critical,
         "priority": _priority(score, confidence), "confidence": confidence,
         "estimated_commission_per_sale": estimated_commission,
         "weakest_factor": weakest, "breakdown": breakdown,
