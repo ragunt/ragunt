@@ -1,6 +1,8 @@
 import json
 import sys
 
+from src.data_intelligence import data_quality, detect_suspicious_data, enrich_product, estimate_competition
+
 FACTOR_MAX = {
     "Demand": 20,
     "Affiliate Economics": 25,
@@ -75,16 +77,18 @@ def _risk_score(product):
         score -= 2
     if 0 < price < 10000:
         score -= 1
+    if detect_suspicious_data(product):
+        score -= min(2.0, len(detect_suspicious_data(product)) * 0.5)
     return max(0.0, min(10.0, score))
 
 
 def _confidence(product):
-    fields = ["name", "price", "rating", "sales", "review_count", "commission_percent", "problem", "benefit", "target"]
-    complete = sum(1 for field in fields if _has(product.get(field)) or _num(product.get(field)) > 0)
-    return round(complete / len(fields) * 100, 1)
+    quality, flags = data_quality(product)
+    return round(max(0.0, quality - min(len(flags) * 2, 10)), 1)
 
 
 def score_breakdown(product):
+    product = enrich_product(product)
     rating = _num(product.get("rating"))
     sales = _num(product.get("sales"))
     demand = min(round(rating / 5 * 6 + _sales_score(sales) * 0.7, 1), 20)
@@ -113,15 +117,12 @@ def affiliate_score(product):
         "Product Quality": 0.05,
         "Risk": 0.05,
     }
-    score = sum(
-        (breakdown[factor] / FACTOR_MAX[factor]) * weight
-        for factor, weight in weights.items()
-    ) * 100
+    score = sum((breakdown[factor] / FACTOR_MAX[factor]) * weight for factor, weight in weights.items()) * 100
     return round(max(0.0, min(100.0, score)), 1)
 
 
 def content_score(product):
-    return round(_content_score(product) / FACTOR_MAX["Content Potential"] * 100, 1)
+    return round(_content_score(enrich_product(product)) / FACTOR_MAX["Content Potential"] * 100, 1)
 
 
 def score_label(score):
@@ -154,7 +155,6 @@ def decision(product, score, confidence, breakdown):
     missing = _missing_critical_fields(product)
     commission = _num(product.get("commission_percent"))
     aff = affiliate_score(product)
-
     if score < 55 or (aff < 45 and confidence >= 80):
         return "🔴 SKIP", "Peluang affiliate belum cukup menarik setelah memperhitungkan ekonomi, demand, konten, dan persaingan.", missing
     if missing or confidence < 80 or commission <= 0:
@@ -172,6 +172,12 @@ def decision(product, score, confidence, breakdown):
 
 
 def build_strategy(product):
+    product = enrich_product(product)
+    if _num(product.get("competition"), -1) < 0:
+        competition, competition_source = estimate_competition(product)
+        product["competition"] = competition
+    else:
+        competition_source = "manual"
     score = score_product(product)
     aff_score = affiliate_score(product)
     cont_score = content_score(product)
@@ -186,6 +192,7 @@ def build_strategy(product):
     breakdown = score_breakdown(product)
     weakest = _weakest_factor(breakdown)
     decision_label, decision_reason, missing_critical = decision(product, score, confidence, breakdown)
+    quality, suspicious_flags = data_quality(product)
     return {
         "product": name,
         "score": score,
@@ -197,6 +204,10 @@ def build_strategy(product):
         "missing_critical_fields": missing_critical,
         "priority": "🔥 PRIORITAS UTAMA" if aff_score >= 80 else ("🟢 LAYAK DIUJI" if aff_score >= 60 else "🟡 DATA / OPTIMASI"),
         "confidence": confidence,
+        "data_quality": quality,
+        "suspicious_flags": suspicious_flags,
+        "intelligence_sources": product.get("intelligence_sources", {}),
+        "competition_source": competition_source,
         "estimated_commission_per_sale": estimated_commission,
         "weakest_factor": weakest,
         "breakdown": breakdown,
@@ -210,11 +221,7 @@ def build_strategy(product):
 
 
 def rank_products(products):
-    return sorted(
-        (build_strategy(product) for product in products),
-        key=lambda item: (item["affiliate_score"], item["score"]),
-        reverse=True,
-    )
+    return sorted((build_strategy(product) for product in products), key=lambda item: (item["affiliate_score"], item["score"]), reverse=True)
 
 
 def main(path):
