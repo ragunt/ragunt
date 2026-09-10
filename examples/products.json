@@ -1,0 +1,24 @@
+[
+  {
+    "name": "Contoh Produk A",
+    "category": "rumah tangga",
+    "price": 49000,
+    "commission_percent": 8,
+    "rating": 4.8,
+    "sales": 12000,
+    "problem": "barang rumah tangga sering berantakan",
+    "benefit": "membuat penyimpanan lebih rapi",
+    "target": "ibu rumah tangga dan pekerja muda"
+  },
+  {
+    "name": "Contoh Produk B",
+    "category": "aksesoris HP",
+    "price": 29000,
+    "commission_percent": 5,
+    "rating": 4.7,
+    "sales": 8000,
+    "problem": "meja kerja penuh kabel",
+    "benefit": "kabel lebih rapi dan mudah dijangkau",
+    "target": "pelajar, pekerja, dan pengguna laptop"
+  }
+]
