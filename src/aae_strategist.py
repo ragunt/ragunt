@@ -2,8 +2,8 @@ import json
 import sys
 
 FACTOR_MAX = {
-    "Demand": 25,
-    "Affiliate Economics": 20,
+    "Demand": 20,
+    "Affiliate Economics": 25,
     "Product Quality": 15,
     "Content Potential": 20,
     "Competition": 10,
@@ -23,16 +23,18 @@ def _has(value):
 
 
 def _sales_score(sales):
-    sales = max(sales, 0)
-    return 25.0 if sales >= 10000 else round(sales / 10000 * 25, 1)
+    sales = max(_num(sales), 0)
+    if sales >= 10000:
+        return 20.0
+    return round(sales / 10000 * 20, 1)
 
 
 def _economics_score(product):
     commission = max(_num(product.get("commission_percent")), 0)
     price = max(_num(product.get("price")), 0)
-    estimated = price * commission / 100
-    rate_points = min(commission / 10 * 12, 12)
-    payout_points = min(estimated / 10000 * 8, 8)
+    payout = price * commission / 100
+    rate_points = min(commission / 10 * 15, 15)
+    payout_points = min(payout / 5000 * 10, 10)
     return round(rate_points + payout_points, 1)
 
 
@@ -43,9 +45,9 @@ def _content_score(product):
     category = str(product.get("category", "")).lower()
     if _has(problem): score += 5
     if _has(benefit): score += 5
-    visual_terms = ["baju", "kemeja", "blouse", "fashion", "sepatu", "tas", "aksesoris", "dapur", "rumah", "organizer", "kabel", "lampu", "beauty", "skincare", "alat", "gadget", "hp", "elektronik", "kebersihan"]
+    visual_terms = ["baju", "gamis", "kemeja", "blouse", "fashion", "sepatu", "tas", "beauty", "skincare", "dapur", "rumah", "organizer", "kabel", "lampu", "gadget", "hp", "elektronik", "kebersihan"]
     if any(term in category or term in problem or term in benefit for term in visual_terms): score += 5
-    demo_terms = ["rapi", "hemat", "cepat", "praktis", "sebelum", "sesudah", "solusi", "mudah"]
+    demo_terms = ["rapi", "hemat", "cepat", "praktis", "sebelum", "sesudah", "solusi", "mudah", "nyaman"]
     if any(term in problem or term in benefit for term in demo_terms): score += 5
     return min(score, 20)
 
@@ -74,17 +76,10 @@ def _confidence(product):
     return round(complete / len(fields) * 100, 1)
 
 
-def _priority(score, confidence):
-    if score >= 85 and confidence >= 80: return "🔥 PRIORITAS TINGGI"
-    if score >= 70: return "🟢 LAYAK DIUJI"
-    if score >= 55: return "🟡 PERLU DATA"
-    return "🔴 SKIP"
-
-
 def score_breakdown(product):
     rating = _num(product.get("rating"))
     sales = _num(product.get("sales"))
-    demand = min(round(rating / 5 * 10 + _sales_score(sales) * 0.6, 1), 25)
+    demand = min(round(rating / 5 * 6 + _sales_score(sales) * 0.7, 1), 20)
     return {
         "Demand": demand,
         "Affiliate Economics": _economics_score(product),
@@ -97,6 +92,24 @@ def score_breakdown(product):
 
 def score_product(product):
     return round(sum(score_breakdown(product).values()), 1)
+
+
+def affiliate_score(product):
+    """Score focused on money-making potential, separate from product popularity."""
+    breakdown = score_breakdown(product)
+    score = (
+        breakdown["Affiliate Economics"] * 0.40
+        + breakdown["Demand"] * 0.20
+        + breakdown["Content Potential"] * 0.20
+        + breakdown["Competition"] * 0.10
+        + breakdown["Product Quality"] * 0.05
+        + breakdown["Risk"] * 0.05
+    )
+    return round(score * 4, 1)
+
+
+def content_score(product):
+    return round(_content_score(product) / 20 * 100, 1)
 
 
 def score_label(score):
@@ -119,18 +132,16 @@ def _missing_critical_fields(product):
 
 
 def _weakest_factor(breakdown):
-    return min(
-        breakdown,
-        key=lambda factor: breakdown[factor] / FACTOR_MAX[factor],
-    )
+    return min(breakdown, key=lambda factor: breakdown[factor] / FACTOR_MAX[factor])
 
 
 def decision(product, score, confidence, breakdown):
     missing = _missing_critical_fields(product)
     commission = _num(product.get("commission_percent"))
+    aff = affiliate_score(product)
 
-    if score < 55:
-        return "🔴 SKIP", "Skor terlalu rendah untuk diprioritaskan.", missing
+    if score < 55 or (aff < 45 and confidence >= 80):
+        return "🔴 SKIP", "Peluang affiliate belum cukup menarik setelah memperhitungkan ekonomi, demand, konten, dan persaingan.", missing
     if missing or confidence < 80 or commission <= 0:
         reasons = []
         if missing:
@@ -138,13 +149,17 @@ def decision(product, score, confidence, breakdown):
         if confidence < 80:
             reasons.append(f"confidence baru {confidence}%")
         return "🟡 KUMPULKAN DATA", "; ".join(reasons) + ".", missing
-    if score >= 70:
-        return "🔥 AMBIL & TES", "Skor dan kelengkapan data cukup kuat untuk masuk tahap uji konten.", missing
-    return "🟡 KUMPULKAN DATA", "Skor belum cukup kuat untuk langsung diuji; kumpulkan data tambahan.", missing
+    if aff >= 70 and score >= 65:
+        return "🔥 AMBIL & TES", f"Affiliate Score {aff}/100 menunjukkan kombinasi uang, demand, konten, dan kompetisi cukup menarik untuk dites.", missing
+    if aff >= 55:
+        return "🟢 LAYAK DIUJI", f"Affiliate Score {aff}/100 cukup menarik, tetapi belum masuk prioritas utama.", missing
+    return "🟡 KUMPULKAN DATA", f"Affiliate Score baru {aff}/100; cari produk dengan ekonomi atau potensi konten yang lebih kuat.", missing
 
 
 def build_strategy(product):
     score = score_product(product)
+    aff_score = affiliate_score(product)
+    cont_score = content_score(product)
     name = product.get("name", "Produk")
     problem = product.get("problem", "ada masalah yang bisa diselesaikan")
     benefit = product.get("benefit", "lebih praktis")
@@ -158,9 +173,11 @@ def build_strategy(product):
     decision_label, decision_reason, missing_critical = decision(product, score, confidence, breakdown)
     return {
         "product": name, "score": score, "label": score_label(score),
+        "affiliate_score": aff_score, "content_score": cont_score,
         "decision": decision_label, "decision_reason": decision_reason,
         "missing_critical_fields": missing_critical,
-        "priority": _priority(score, confidence), "confidence": confidence,
+        "priority": "🔥 PRIORITAS UTAMA" if aff_score >= 80 else ("🟢 LAYAK DIUJI" if aff_score >= 60 else "🟡 DATA / OPTIMASI"),
+        "confidence": confidence,
         "estimated_commission_per_sale": estimated_commission,
         "weakest_factor": weakest, "breakdown": breakdown,
         "angle": f"Solusi praktis untuk {problem}",
@@ -173,7 +190,7 @@ def build_strategy(product):
 
 
 def rank_products(products):
-    return sorted((build_strategy(product) for product in products), key=lambda item: item["score"], reverse=True)
+    return sorted((build_strategy(product) for product in products), key=lambda item: (item["affiliate_score"], item["score"]), reverse=True)
 
 
 def main(path):
