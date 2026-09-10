@@ -64,46 +64,67 @@ def _json_ld(soup):
     return {}
 
 
-def analyze_shopee_url(url, timeout=15):
-    """Fetch a public Shopee product page and extract common product metadata.
+def _extract_sales_and_reviews(page_text):
+    sales = 0
+    review_count = 0
 
-    Shopee may block automated requests or require login. In those cases this
-    function returns a clear fallback state instead of pretending the data is valid.
-    """
+    for pattern in [
+        r"([0-9][0-9.,]*\s*[kKmM]?)\s*(?:terjual|sold)",
+        r"terjual\s*([0-9][0-9.,]*\s*[kKmM]?)",
+    ]:
+        match = re.search(pattern, page_text, re.I)
+        if match:
+            sales = _number(match.group(1))
+            break
+
+    for pattern in [
+        r"([0-9][0-9.,]*\s*[kKmM]?)\s*(?:ulasan|penilaian|review)",
+        r"(?:ulasan|penilaian|review)\s*([0-9][0-9.,]*\s*[kKmM]?)",
+    ]:
+        match = re.search(pattern, page_text, re.I)
+        if match:
+            review_count = _number(match.group(1))
+            break
+
+    return sales, review_count
+
+
+def _extract_category(soup):
+    for selector in ['meta[property="product:category"]', 'meta[name="category"]']:
+        value = _first_text(soup, [selector])
+        if value:
+            return value
+    breadcrumb = soup.select_one("nav")
+    if breadcrumb:
+        text = breadcrumb.get_text(" > ", strip=True)
+        if text:
+            return text[:200]
+    return ""
+
+
+def analyze_shopee_url(url, timeout=15):
+    """Fetch a public Shopee product page and extract common metadata."""
     if not is_shopee_url(url):
         return {"ok": False, "error": "Masukkan URL produk Shopee Indonesia yang valid."}
 
     headers = {
-        "User-Agent": (
-            "Mozilla/5.0 (Linux; Android 10) AppleWebKit/537.36 "
-            "Chrome/120.0 Mobile Safari/537.36"
-        ),
+        "User-Agent": "Mozilla/5.0 (Linux; Android 10) AppleWebKit/537.36 Chrome/120.0 Mobile Safari/537.36",
         "Accept-Language": "id-ID,id;q=0.9,en;q=0.8",
     }
 
     try:
         response = requests.get(url.strip(), headers=headers, timeout=timeout, allow_redirects=True)
         if response.status_code >= 400:
-            return {
-                "ok": False,
-                "error": f"Halaman Shopee tidak bisa diakses otomatis (HTTP {response.status_code}).",
-                "fallback": True,
-            }
+            return {"ok": False, "error": f"Halaman Shopee tidak bisa diakses otomatis (HTTP {response.status_code}).", "fallback": True}
     except requests.RequestException as exc:
         return {"ok": False, "error": f"Gagal mengambil halaman Shopee: {exc}", "fallback": True}
 
     soup = BeautifulSoup(response.text, "html.parser")
     ld = _json_ld(soup)
+    page_text = soup.get_text(" ", strip=True)
 
-    name = ld.get("name", "") or _first_text(soup, [
-        'meta[property="og:title"]',
-        'meta[name="twitter:title"]',
-        "title",
-    ])
-    description = ld.get("description", "") or _first_text(soup, [
-        'meta[property="og:description"]',
-        'meta[name="description"]',
-    ])
+    name = ld.get("name", "") or _first_text(soup, ['meta[property="og:title"]', 'meta[name="twitter:title"]', "title"])
+    description = ld.get("description", "") or _first_text(soup, ['meta[property="og:description"]', 'meta[name="description"]'])
     image = ld.get("image", "") or _first_text(soup, ['meta[property="og:image"]'])
 
     offers = ld.get("offers", {})
@@ -118,9 +139,6 @@ def analyze_shopee_url(url, timeout=15):
         except (TypeError, ValueError):
             rating = 0.0
 
-    # Metadata fallback. These patterns are intentionally conservative because
-    # Shopee's HTML structure can change frequently.
-    page_text = soup.get_text(" ", strip=True)
     if not price:
         match = re.search(r"Rp\s?([0-9.]+)", page_text)
         if match:
@@ -130,13 +148,16 @@ def analyze_shopee_url(url, timeout=15):
         if match:
             rating = float(match.group(1).replace(",", "."))
 
+    sales, review_count = _extract_sales_and_reviews(page_text)
+    category = _extract_category(soup)
+
     data = {
         "name": name,
         "price": price,
         "rating": rating,
-        "sales": 0,
-        "review_count": 0,
-        "category": "",
+        "sales": sales,
+        "review_count": review_count,
+        "category": category,
         "image": image,
         "description": description,
         "commission_percent": 0,
@@ -146,12 +167,10 @@ def analyze_shopee_url(url, timeout=15):
         "source_url": url.strip(),
     }
 
+    data["missing_fields"] = [field for field in ("name", "price", "rating", "sales", "review_count", "category") if not data[field]]
+    data["auto_fields"] = [field for field in ("name", "price", "rating", "sales", "review_count", "category", "image") if data.get(field)]
+
     if not data["name"] and not data["price"] and not data["rating"]:
-        return {
-            "ok": False,
-            "error": "Halaman berhasil diakses, tetapi data produk tidak terbaca. Shopee mungkin mengirim halaman dinamis atau membatasi akses otomatis.",
-            "fallback": True,
-            "data": data,
-        }
+        return {"ok": False, "error": "Halaman berhasil diakses, tetapi data produk tidak terbaca. Shopee mungkin mengirim halaman dinamis atau membatasi akses otomatis.", "fallback": True, "data": data}
 
     return {"ok": True, "data": data}
